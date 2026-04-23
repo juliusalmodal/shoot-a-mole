@@ -374,25 +374,16 @@ export default function WhackAMole() {
     if (userRef.current) {
       setSubmitting(true)
       setSubmitError('')
-      const token = userRef.current.idToken
-      const tokenHeader = token ? (() => {
-        try { return JSON.parse(atob(token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))) }
-        catch { return 'decode-failed' }
-      })() : 'no-token'
-      // eslint-disable-next-line no-console
-      console.log('[wam] submitting score', { tokenHeader, len: token?.length, preview: token?.slice(0, 40) })
       fetch('/api/mole', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Id-Token': token,
+          'X-Id-Token': userRef.current.idToken,
         },
         body: JSON.stringify({ score: scoreRef.current }),
       })
         .then(async r => {
           const data = await r.json().catch(() => ({}))
-          // eslint-disable-next-line no-console
-          console.log('[wam] submit response', { status: r.status, data })
           if (!r.ok) throw new Error(data.error || `Server error ${r.status}`)
           return data
         })
