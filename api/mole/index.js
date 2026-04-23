@@ -71,8 +71,8 @@ app.http('mole-post', {
     let payload
     try {
       payload = await verifyGoogleToken(match[1])
-    } catch {
-      return { status: 401, headers: cors, jsonBody: { error: 'Invalid token' } }
+    } catch (err) {
+      return { status: 401, headers: cors, jsonBody: { error: `Token verify failed: ${err.message}` } }
     }
 
     let body = {}
