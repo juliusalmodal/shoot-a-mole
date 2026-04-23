@@ -1,0 +1,9 @@
+{
+  "name": "shoot-a-mole-api",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/data-tables": "^13.3.0"
+  }
+}
