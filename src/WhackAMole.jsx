@@ -20,6 +20,8 @@ function decodeJwt(token) {
   } catch { return null }
 }
 
+const firstName = (name) => (name || '').trim().split(/\s+/)[0] || name || ''
+
 function Crosshair({ elRef }) {
   return (
     <svg
@@ -156,7 +158,7 @@ function Leaderboard({ data, highlightSub }) {
                 <li key={r.rank} className={`wam-lb-row ${highlightSub === r.sub ? 'wam-lb-me' : ''}`}>
                   <span className="wam-lb-rank">#{r.rank}</span>
                   <Avatar src={r.picture} name={r.name} size={28} />
-                  <span className="wam-lb-nick">{r.name}</span>
+                  <span className="wam-lb-nick" title={r.name}>{firstName(r.name)}</span>
                   <span className="wam-lb-score">{r.score}</span>
                 </li>
               ))}
@@ -191,6 +193,7 @@ export default function WhackAMole() {
   const [moles, setMoles] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
   const [myRank, setMyRank] = useState(null)
   const [authError, setAuthError] = useState('')
 
@@ -370,6 +373,7 @@ export default function WhackAMole() {
 
     if (userRef.current) {
       setSubmitting(true)
+      setSubmitError('')
       fetch('/api/mole', {
         method: 'POST',
         headers: {
@@ -378,14 +382,18 @@ export default function WhackAMole() {
         },
         body: JSON.stringify({ score: scoreRef.current }),
       })
-        .then(r => r.json())
+        .then(async r => {
+          const data = await r.json().catch(() => ({}))
+          if (!r.ok) throw new Error(data.error || `Server error ${r.status}`)
+          return data
+        })
         .then(d => {
           const lb = d.leaderboard || []
           setLeaderboard(lb)
           const idx = lb.findIndex(r => r.sub === userRef.current.sub)
           setMyRank(idx >= 0 ? idx + 1 : null)
         })
-        .catch(() => {})
+        .catch(err => setSubmitError(err.message || 'Could not save score.'))
         .finally(() => setSubmitting(false))
     }
   }
@@ -426,6 +434,7 @@ export default function WhackAMole() {
     setMoles([])
     setScore(0)
     setMyRank(null)
+    setSubmitError('')
     fnRef.current.audio?.()
     setCountdown(3)
     enterFullscreen()
@@ -499,7 +508,7 @@ export default function WhackAMole() {
             <div className="wam-user-card">
               <Avatar src={user.picture} name={user.name} size={44} />
               <div className="wam-user-info">
-                <p className="wam-user-name">{user.name}</p>
+                <p className="wam-user-name" title={user.name}>Playing as <strong>{firstName(user.name)}</strong></p>
                 <button className="wam-user-signout" onClick={signOut}>Sign out</button>
               </div>
               <button className="wam-btn" onClick={beginGame}>Start Game</button>
@@ -533,7 +542,7 @@ export default function WhackAMole() {
                 {user ? (
                   <div className="wam-stat-player-row">
                     <Avatar src={user.picture} name={user.name} size={28} />
-                    <span className="wam-stat-value wam-stat-nick">{user.name}</span>
+                    <span className="wam-stat-value wam-stat-nick" title={user.name}>{firstName(user.name)}</span>
                   </div>
                 ) : (
                   <span className="wam-stat-value wam-stat-nick">ANONYMOUS</span>
@@ -587,9 +596,11 @@ export default function WhackAMole() {
                     {user
                       ? submitting
                         ? <p className="wam-over-sub">Saving score…</p>
-                        : myRank
-                          ? <p className="wam-over-sub">You ranked <strong>#{myRank}</strong> on the leaderboard</p>
-                          : <p className="wam-over-sub">Score saved.</p>
+                        : submitError
+                          ? <p className="wam-over-sub wam-over-err">Couldn't save: {submitError}</p>
+                          : myRank
+                            ? <p className="wam-over-sub">You ranked <strong>#{myRank}</strong> on the leaderboard</p>
+                            : <p className="wam-over-sub">Score saved.</p>
                       : <p className="wam-over-sub">Playing anonymously — sign in to save your next score.</p>
                     }
                     {!submitting && (

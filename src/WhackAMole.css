@@ -434,6 +434,7 @@
   margin-bottom: 1.5rem;
 }
 .wam-over-sub strong { color: rgba(255,255,255,0.8); }
+.wam-over-err { color: #e05250 !important; }
 
 /* ── LEADERBOARD ── */
 .wam-lb {
