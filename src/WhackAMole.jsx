@@ -391,6 +391,8 @@ export default function WhackAMole() {
       })
         .then(async r => {
           const data = await r.json().catch(() => ({}))
+          // eslint-disable-next-line no-console
+          console.log('[wam] submit response', { status: r.status, data })
           if (!r.ok) throw new Error(data.error || `Server error ${r.status}`)
           return data
         })
