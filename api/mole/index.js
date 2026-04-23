@@ -62,13 +62,10 @@ app.http('mole-post', {
   handler: async (request) => {
     const cors = { 'Access-Control-Allow-Origin': '*' }
 
-    const authHeader = request.headers.get('authorization') || ''
-    const match = authHeader.match(/^Bearer\s+(.+)$/i)
-    if (!match) {
-      return { status: 401, headers: cors, jsonBody: { error: 'Missing bearer token' } }
+    const token = (request.headers.get('x-id-token') || '').trim()
+    if (!token) {
+      return { status: 401, headers: cors, jsonBody: { error: 'Missing token' } }
     }
-
-    const token = match[1]
     const parts = token.split('.')
     const debug = {
       tokenPreview: token.slice(0, 60) + '...',

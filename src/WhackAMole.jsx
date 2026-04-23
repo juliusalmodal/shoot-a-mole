@@ -385,7 +385,7 @@ export default function WhackAMole() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'X-Id-Token': token,
         },
         body: JSON.stringify({ score: scoreRef.current }),
       })
