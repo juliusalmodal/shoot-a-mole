@@ -1,14 +1,11 @@
 const { app } = require('@azure/functions')
 const { TableClient } = require('@azure/data-tables')
+const { OAuth2Client } = require('google-auth-library')
 
 const TABLE = 'moleScores'
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID
 
-const BLOCKED_WORDS = [
-  'NIGGA','NIGGER','NIGER','NIGA','N1GGA','N1GGER',
-  'CHINK','GOOK','SPIC','SPICK','KIKE','WETBACK','BEANER','RAGHEAD',
-  'FAGGOT','FAGOT','CUNT','RETARD','TRANNY',
-]
-const isBlocked = (name) => BLOCKED_WORDS.some(w => name.includes(w))
+const oauthClient = new OAuth2Client(GOOGLE_CLIENT_ID)
 
 function getClient() {
   const conn = process.env.AZURE_STORAGE_CONNECTION_STRING
@@ -24,7 +21,22 @@ async function getLeaderboard(client) {
   const rows = []
   for await (const entity of client.listEntities()) rows.push(entity)
   rows.sort((a, b) => b.score - a.score)
-  return rows.slice(0, 20).map((e, i) => ({ rank: i + 1, nickname: e.nickname, score: e.score }))
+  return rows.slice(0, 20).map((e, i) => ({
+    rank: i + 1,
+    sub: e.rowKey,
+    name: e.name,
+    picture: e.picture || null,
+    score: e.score,
+  }))
+}
+
+async function verifyGoogleToken(idToken) {
+  if (!GOOGLE_CLIENT_ID) throw new Error('GOOGLE_CLIENT_ID is not configured.')
+  const ticket = await oauthClient.verifyIdToken({
+    idToken,
+    audience: GOOGLE_CLIENT_ID,
+  })
+  return ticket.getPayload()
 }
 
 app.http('mole-get', {
@@ -49,38 +61,47 @@ app.http('mole-post', {
   authLevel: 'anonymous',
   handler: async (request) => {
     const cors = { 'Access-Control-Allow-Origin': '*' }
+
+    const authHeader = request.headers.get('authorization') || ''
+    const match = authHeader.match(/^Bearer\s+(.+)$/i)
+    if (!match) {
+      return { status: 401, headers: cors, jsonBody: { error: 'Missing bearer token' } }
+    }
+
+    let payload
+    try {
+      payload = await verifyGoogleToken(match[1])
+    } catch {
+      return { status: 401, headers: cors, jsonBody: { error: 'Invalid token' } }
+    }
+
     let body = {}
     try { body = await request.json() } catch {}
 
-    const { nickname, score } = body
-    if (!nickname || typeof score !== 'number' || score < 0) {
-      return { status: 400, headers: cors, jsonBody: { error: 'Invalid payload' } }
+    const { score } = body
+    if (typeof score !== 'number' || score < 0 || !Number.isFinite(score)) {
+      return { status: 400, headers: cors, jsonBody: { error: 'Invalid score' } }
     }
 
-    const clean = nickname.toUpperCase().replace(/[^A-Z0-9_]/g, '').slice(0, 8)
-    if (!clean || isBlocked(clean)) {
-      return { status: 400, headers: cors, jsonBody: { error: 'Nickname not allowed' } }
-    }
-
-    const ip = (request.headers.get('x-forwarded-for') || '').split(',')[0].trim() || 'unknown'
-    const rowKey = clean
+    const sub = payload.sub
+    const name = (payload.name || payload.email || 'Player').slice(0, 80)
+    const picture = payload.picture || null
 
     try {
       const client = getClient()
       await ensureTable(client)
 
       let existing = null
-      try { existing = await client.getEntity('scores', rowKey) } catch {}
+      try { existing = await client.getEntity('scores', sub) } catch {}
 
-      if (!existing || score > existing.score) {
-        await client.upsertEntity({
-          partitionKey: 'scores',
-          rowKey,
-          nickname: clean,
-          score,
-          ip,
-        }, 'Replace')
-      }
+      const nextScore = existing ? Math.max(existing.score, Math.floor(score)) : Math.floor(score)
+      await client.upsertEntity({
+        partitionKey: 'scores',
+        rowKey: sub,
+        name,
+        picture,
+        score: nextScore,
+      }, 'Replace')
 
       return { headers: cors, jsonBody: { leaderboard: await getLeaderboard(client) } }
     } catch (err) {

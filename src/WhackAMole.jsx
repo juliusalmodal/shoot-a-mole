@@ -1,21 +1,23 @@
 import { useState, useEffect, useRef } from 'react'
+import { GOOGLE_CLIENT_ID } from './config'
 import './WhackAMole.css'
 
 const SIZE_MIN = 36
 const SIZE_MAX = 90
 
-const BLOCKED_WORDS = [
-  'NIGGA','NIGGER','NIGER','NIGA','N1GGA','N1GGER',
-  'CHINK','GOOK','SPIC','SPICK','KIKE','WETBACK','BEANER','RAGHEAD',
-  'FAGGOT','FAGOT',
-  'CUNT','RETARD','TRANNY',
-]
-const isNickBlocked = (name) => BLOCKED_WORDS.some(w => name.includes(w))
-const sanitizeNick = (raw) => raw.toUpperCase().replace(/[^A-Z0-9_]/g, '').slice(0, 8)
-
 function getLifespan(score) {
   // 2200ms at score 0, decreases 45ms per point, floor 500ms
   return Math.max(500, 2200 - score * 45)
+}
+
+function decodeJwt(token) {
+  try {
+    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const json = decodeURIComponent(atob(base64).split('').map(c =>
+      '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+    ).join(''))
+    return JSON.parse(json)
+  } catch { return null }
 }
 
 function Crosshair({ elRef }) {
@@ -105,18 +107,42 @@ function ShootBackground() {
   )
 }
 
+function Avatar({ src, name, size = 24 }) {
+  const [failed, setFailed] = useState(false)
+  const initials = (name || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase()
+  if (!src || failed) {
+    return (
+      <div className="wam-avatar wam-avatar-fallback" style={{ width: size, height: size, fontSize: size * 0.42 }}>
+        {initials}
+      </div>
+    )
+  }
+  return (
+    <img
+      className="wam-avatar"
+      src={src}
+      alt={name}
+      width={size}
+      height={size}
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  )
+}
+
 const LB_PER_PAGE = 10
 
-function Leaderboard({ data, highlight }) {
+function Leaderboard({ data, highlightSub }) {
   const [page, setPage] = useState(0)
   const totalPages = Math.ceil(data.length / LB_PER_PAGE)
   const slice = data.slice(page * LB_PER_PAGE, (page + 1) * LB_PER_PAGE)
 
   useEffect(() => {
-    if (!highlight) return
-    const idx = data.findIndex(r => r.nickname === highlight)
+    if (!highlightSub) return
+    const idx = data.findIndex(r => r.sub === highlightSub)
     if (idx >= 0) setPage(Math.floor(idx / LB_PER_PAGE))
-  }, [highlight, data])
+  }, [highlightSub, data])
 
   return (
     <div className="wam-lb">
@@ -127,9 +153,10 @@ function Leaderboard({ data, highlight }) {
           <>
             <ol className="wam-lb-list">
               {slice.map(r => (
-                <li key={r.rank} className={`wam-lb-row ${highlight === r.nickname ? 'wam-lb-me' : ''}`}>
+                <li key={r.rank} className={`wam-lb-row ${highlightSub === r.sub ? 'wam-lb-me' : ''}`}>
                   <span className="wam-lb-rank">#{r.rank}</span>
-                  <span className="wam-lb-nick">{r.nickname}</span>
+                  <Avatar src={r.picture} name={r.name} size={28} />
+                  <span className="wam-lb-nick">{r.name}</span>
                   <span className="wam-lb-score">{r.score}</span>
                 </li>
               ))}
@@ -157,29 +184,63 @@ function Leaderboard({ data, highlight }) {
 }
 
 export default function WhackAMole() {
-  const [phase, setPhase] = useState('nickname')
-  const [consent, setConsent] = useState(() => localStorage.getItem('wam_consent')) // null | 'yes' | 'no'
-  const [inputName, setInputName] = useState(() =>
-    localStorage.getItem('wam_consent') === 'yes' ? (localStorage.getItem('wam_nick') || '') : ''
-  )
+  const [phase, setPhase] = useState('gate')
+  const [user, setUser] = useState(null)  // null | { idToken, sub, name, picture }
   const [score, setScore] = useState(0)
   const [countdown, setCountdown] = useState(3)
   const [moles, setMoles] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
   const [submitting, setSubmitting] = useState(false)
   const [myRank, setMyRank] = useState(null)
-  const [nickError, setNickError] = useState('')
+  const [authError, setAuthError] = useState('')
 
   const boardRef = useRef(null)
   const crosshairRef = useRef(null)
+  const signInRef = useRef(null)
   const molesRef = useRef([])
   const scoreRef = useRef(0)
-  const nickRef = useRef('')
-  const consentRef = useRef(localStorage.getItem('wam_consent'))
+  const userRef = useRef(null)
   const missTimerRef = useRef(null)
   const gameOverRef = useRef(false)
   const fnRef = useRef({})
   const audioCtxRef = useRef(null)
+
+  // Initialize Google Identity Services
+  useEffect(() => {
+    if (phase !== 'gate' || user) return
+
+    const tryInit = () => {
+      if (!window.google?.accounts?.id || !signInRef.current) return false
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: (response) => {
+          const payload = decodeJwt(response.credential)
+          if (!payload) { setAuthError('Sign-in failed. Try again.'); return }
+          const u = {
+            idToken: response.credential,
+            sub: payload.sub,
+            name: payload.name || payload.email,
+            picture: payload.picture || null,
+          }
+          userRef.current = u
+          setUser(u)
+          setAuthError('')
+        },
+        auto_select: false,
+      })
+      window.google.accounts.id.renderButton(signInRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        text: 'signin_with',
+        shape: 'rectangular',
+      })
+      return true
+    }
+
+    if (tryInit()) return
+    const interval = setInterval(() => { if (tryInit()) clearInterval(interval) }, 100)
+    return () => clearInterval(interval)
+  }, [phase, user])
 
   // Countdown 3 → 2 → 1 → GO! → start spawning
   useEffect(() => {
@@ -223,7 +284,6 @@ export default function WhackAMole() {
       const s = ctx.createBufferSource(); s.buffer = b; return s
     }
 
-    // 1. Suppressed muzzle blast — muffled "pfft" (low-pass noise)
     const pfft = noise(0.09)
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900
     const gPfft = ctx.createGain()
@@ -232,7 +292,6 @@ export default function WhackAMole() {
     pfft.connect(lp); lp.connect(gPfft); gPfft.connect(ctx.destination)
     pfft.start(t)
 
-    // 2. Subsonic thump — body of the shot (low sine)
     const oThump = ctx.createOscillator(), gThump = ctx.createGain()
     oThump.type = 'sine'
     oThump.frequency.setValueAtTime(110, t)
@@ -242,7 +301,6 @@ export default function WhackAMole() {
     oThump.connect(gThump); gThump.connect(ctx.destination)
     oThump.start(t); oThump.stop(t + 0.1)
 
-    // 3. Slide/casing click — metallic tick slightly after shot
     const click = noise(0.025)
     const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 4000
     const gClick = ctx.createGain()
@@ -310,18 +368,21 @@ export default function WhackAMole() {
     setMoles([])
     setPhase('gameover')
 
-    if (consentRef.current === 'yes') {
+    if (userRef.current) {
       setSubmitting(true)
       fetch('/api/mole', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: nickRef.current, score: scoreRef.current }),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${userRef.current.idToken}`,
+        },
+        body: JSON.stringify({ score: scoreRef.current }),
       })
         .then(r => r.json())
         .then(d => {
           const lb = d.leaderboard || []
           setLeaderboard(lb)
-          const idx = lb.findIndex(r => r.nickname === nickRef.current)
+          const idx = lb.findIndex(r => r.sub === userRef.current.sub)
           setMyRank(idx >= 0 ? idx + 1 : null)
         })
         .catch(() => {})
@@ -358,47 +419,32 @@ export default function WhackAMole() {
     }
   }
 
-  const beginGame = (saveData) => {
-    const name = sanitizeNick(inputName.trim())
-    if (!name) return
-    if (isNickBlocked(name)) { setNickError('That nickname isn\'t allowed.'); return }
-    setNickError('')
-    const c = saveData ? 'yes' : 'no'
-    localStorage.setItem('wam_consent', c)
-    consentRef.current = c
-    setConsent(c)
-    if (saveData) localStorage.setItem('wam_nick', name)
-    nickRef.current = name
+  const beginGame = () => {
     scoreRef.current = 0
     gameOverRef.current = false
     molesRef.current = []
     setMoles([])
     setScore(0)
     setMyRank(null)
-    fnRef.current.audio?.()  // prime AudioContext on user gesture
+    fnRef.current.audio?.()
     setCountdown(3)
     enterFullscreen()
     setPhase('countdown')
   }
 
-  const startGame = (e) => {
-    e.preventDefault()
-    beginGame(consent === 'yes')
-  }
-
-  const forgetMe = () => {
-    localStorage.removeItem('wam_consent')
-    localStorage.removeItem('wam_nick')
-    consentRef.current = null
-    setConsent(null)
-    setInputName('')
+  const signOut = () => {
+    if (window.google?.accounts?.id) {
+      window.google.accounts.id.disableAutoSelect()
+    }
+    userRef.current = null
+    setUser(null)
   }
 
   const playAgain = () => {
     clearTimeout(missTimerRef.current)
     gameOverRef.current = false
     exitFullscreen()
-    setPhase('nickname')
+    setPhase('gate')
   }
 
   const onBoardMouseMove = (e) => {
@@ -438,9 +484,9 @@ export default function WhackAMole() {
     <div className="wam-page">
       <a href="https://jeules.net" className="wam-back">← Back to site</a>
 
-      {phase === 'nickname' && <ShootBackground />}
+      {phase === 'gate' && <ShootBackground />}
 
-      {phase === 'nickname' && (
+      {phase === 'gate' && (
         <div className="wam-gate">
           <p className="wam-label">Mini Game</p>
           <h1 className="wam-heading">Shoot-a-<em>Mole.</em></h1>
@@ -449,64 +495,32 @@ export default function WhackAMole() {
             Miss one and it's game over. How far can you go?
           </p>
 
-          {consent === null ? (
-            <>
-              <div className="wam-form-row">
-                <input
-                  type="text"
-                  className="wam-input"
-                  placeholder="Nickname (8 chars, A–Z 0–9 _)"
-                  value={inputName}
-                  onChange={e => { setNickError(''); setInputName(sanitizeNick(e.target.value)) }}
-                  maxLength={8}
-                  autoFocus
-                />
+          {user ? (
+            <div className="wam-user-card">
+              <Avatar src={user.picture} name={user.name} size={44} />
+              <div className="wam-user-info">
+                <p className="wam-user-name">{user.name}</p>
+                <button className="wam-user-signout" onClick={signOut}>Sign out</button>
               </div>
-              {nickError && <p className="wam-nick-error">{nickError}</p>}
-              <div className="wam-consent">
-                <p className="wam-consent-text">
-                  We save your nickname and best score in this browser to show you on the leaderboard.
-                  Your score is tied to your IP to prevent duplicate entries.
-                </p>
-                <div className="wam-consent-btns">
-                  <button
-                    className="wam-btn"
-                    disabled={!inputName.trim()}
-                    onClick={() => beginGame(true)}
-                  >
-                    Accept &amp; Play
-                  </button>
-                  <button
-                    className="wam-btn-ghost"
-                    disabled={!inputName.trim()}
-                    onClick={() => beginGame(false)}
-                  >
-                    Play Anonymously
-                  </button>
-                </div>
-              </div>
-            </>
+              <button className="wam-btn" onClick={beginGame}>Start Game</button>
+            </div>
           ) : (
             <>
-              <form onSubmit={startGame} className="wam-form">
-                <input
-                  type="text"
-                  placeholder="Nickname (8 chars, A–Z 0–9 _)"
-                  value={inputName}
-                  onChange={e => { setNickError(''); setInputName(sanitizeNick(e.target.value)) }}
-                  maxLength={8}
-                  autoFocus
-                />
-                <button type="submit" disabled={!inputName.trim()}>Start</button>
-              </form>
-              {nickError && <p className="wam-nick-error">{nickError}</p>}
-              <button className="wam-forget" onClick={forgetMe}>
-                {consent === 'yes' ? 'Forget me & clear data' : 'Change privacy choice'}
+              <div className="wam-auth">
+                <p className="wam-auth-text">
+                  Sign in with Google to save your score to the leaderboard.
+                </p>
+                <div ref={signInRef} className="wam-gsi-btn" />
+                {authError && <p className="wam-nick-error">{authError}</p>}
+              </div>
+              <button className="wam-btn-ghost wam-anon" onClick={beginGame}>
+                Play Anonymously
               </button>
+              <p className="wam-anon-note">Anonymous scores aren't saved.</p>
             </>
           )}
 
-          <Leaderboard data={leaderboard} highlight={null} />
+          <Leaderboard data={leaderboard} highlightSub={null} />
         </div>
       )}
 
@@ -514,9 +528,16 @@ export default function WhackAMole() {
         <div className="wam-layout">
           <div className="wam-game-col">
             <div className="wam-hud">
-              <div className="wam-stat">
+              <div className="wam-stat wam-stat-player">
                 <span className="wam-stat-label">Player</span>
-                <span className="wam-stat-value wam-stat-nick">{nickRef.current}</span>
+                {user ? (
+                  <div className="wam-stat-player-row">
+                    <Avatar src={user.picture} name={user.name} size={28} />
+                    <span className="wam-stat-value wam-stat-nick">{user.name}</span>
+                  </div>
+                ) : (
+                  <span className="wam-stat-value wam-stat-nick">ANONYMOUS</span>
+                )}
               </div>
               <div className="wam-stat wam-stat-right">
                 <span className="wam-stat-label">Score</span>
@@ -563,13 +584,13 @@ export default function WhackAMole() {
                     <p className="wam-over-score">
                       You shot <strong>{score}</strong> {score === 1 ? 'mole' : 'moles'}
                     </p>
-                    {consent === 'yes'
+                    {user
                       ? submitting
                         ? <p className="wam-over-sub">Saving score…</p>
                         : myRank
                           ? <p className="wam-over-sub">You ranked <strong>#{myRank}</strong> on the leaderboard</p>
                           : <p className="wam-over-sub">Score saved.</p>
-                      : <p className="wam-over-sub">Playing anonymously — score not saved.</p>
+                      : <p className="wam-over-sub">Playing anonymously — sign in to save your next score.</p>
                     }
                     {!submitting && (
                       <button className="wam-btn" onClick={playAgain}>Play Again</button>
@@ -581,10 +602,9 @@ export default function WhackAMole() {
           </div>
 
           <div className="wam-sidebar">
-
             <Leaderboard
               data={leaderboard}
-              highlight={phase === 'gameover' ? nickRef.current : null}
+              highlightSub={phase === 'gameover' && user ? user.sub : null}
             />
           </div>
         </div>
