@@ -68,11 +68,27 @@ app.http('mole-post', {
       return { status: 401, headers: cors, jsonBody: { error: 'Missing bearer token' } }
     }
 
+    const token = match[1]
+    const parts = token.split('.')
+    const debug = {
+      tokenPreview: token.slice(0, 60) + '...',
+      parts: parts.length,
+      header: null,
+      payloadKeys: null,
+    }
+    try {
+      debug.header = JSON.parse(Buffer.from(parts[0].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString())
+      const payloadRaw = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString())
+      debug.payloadKeys = Object.keys(payloadRaw)
+      debug.iss = payloadRaw.iss
+      debug.aud = payloadRaw.aud
+    } catch (e) { debug.decodeError = e.message }
+
     let payload
     try {
-      payload = await verifyGoogleToken(match[1])
+      payload = await verifyGoogleToken(token)
     } catch (err) {
-      return { status: 401, headers: cors, jsonBody: { error: `Token verify failed: ${err.message}` } }
+      return { status: 401, headers: cors, jsonBody: { error: `Token verify failed: ${err.message}`, debug } }
     }
 
     let body = {}
