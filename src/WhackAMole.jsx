@@ -436,7 +436,7 @@ export default function WhackAMole() {
 
   return (
     <div className="wam-page">
-      <a href="https://jeules.info" className="wam-back">← Back to site</a>
+      <a href="https://jeules.net" className="wam-back">← Back to site</a>
 
       {phase === 'nickname' && <ShootBackground />}
 

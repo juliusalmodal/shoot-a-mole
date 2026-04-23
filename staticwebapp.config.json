@@ -10,7 +10,7 @@
     }
   },
   "globalHeaders": {
-    "Content-Security-Policy": "frame-ancestors 'self' https://jeules.info https://www.jeules.info",
+    "Content-Security-Policy": "frame-ancestors 'self' https://jeules.net https://www.jeules.net",
     "X-Content-Type-Options": "nosniff",
     "X-XSS-Protection": "1; mode=block",
     "Referrer-Policy": "strict-origin-when-cross-origin",
